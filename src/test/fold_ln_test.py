@@ -55,7 +55,7 @@ def fold_ln_weights(
 @pytest.mark.parametrize("linear_bias", [True, False])
 @pytest.mark.parametrize("ln_bias", [True, False])
 def test_folded_ln_linear(
-    linear_class: type[nn.Linear],
+    linear_class: type[nn.Linear | Conv1D],
     ln_class: type[nn.LayerNorm | nn.RMSNorm],
     linear_bias: bool,
     ln_bias: bool,
@@ -97,8 +97,7 @@ def test_folded_ln_linear(
         "meta-llama/Llama-3.2-1B",
     ],
 )
-@pytest.mark.parametrize("precompute_ov", [True, False])
-def test_attention(model_name_or_path: str, precompute_ov: bool):
+def test_folded_ln_linear_model(model_name_or_path: str):
     tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, padding_side="left")
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
