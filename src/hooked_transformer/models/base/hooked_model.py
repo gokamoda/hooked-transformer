@@ -6,6 +6,9 @@ from hooked_transformer.auto_model import AutoModelForCausalLMWithAliases
 from hooked_transformer.hook import Hook
 from hooked_transformer.utils import get_deep_attr
 
+from .data import (
+    CausalLMObservationBatchResult,
+)
 from .hook import (
     AttnHookResult,
     AttnKProjHookResult,
@@ -257,7 +260,7 @@ class HookedModelForCausalLM:
 
         self.set_layers_hook(layers_hook_config)
 
-    def hook_results(self):
+    def hook_results(self) -> CausalLMObservationBatchResult:
         return self.hooks.get_results()
 
     @torch.no_grad()

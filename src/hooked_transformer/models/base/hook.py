@@ -123,9 +123,18 @@ class Hooks:
         if self.embed_tokens is None:
             embed_tokens_result = None
         else:
+            try:
+                input_tokens = self.embed_tokens.result.in_input
+            except AttributeError:
+                input_tokens = None
+
+            try:
+                out_hidden_states = self.embed_tokens.result.out_hidden_states
+            except AttributeError:
+                out_hidden_states = None
             embed_tokens_result = EmbedTokensObservationBatchResult(
-                input_tokens=self.embed_tokens.result.in_input,
-                out_hidden_states=self.embed_tokens.result.out_hidden_states,
+                input_tokens=input_tokens,
+                out_hidden_states=out_hidden_states,
             )
 
         if self.embed_positions is None:
