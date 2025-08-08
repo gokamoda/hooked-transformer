@@ -7,28 +7,68 @@ from transformers import AutoTokenizer
 from transformers.pytorch_utils import Conv1D
 
 from hooked_transformer.auto_hooked_model import AutoHookedModelForCausalLM
+from hooked_transformer.utils.typing import Tensor
+
+
+class LinearRemovedLayerNorm(nn.Module):
+    def __init__(self, eps: float = 1e-5):
+        super().__init__()
+        self.eps = eps
+
+    def forward(self, hidden_states: Tensor) -> Tensor:
+        var = hidden_states.var(dim=-1, keepdim=True, unbiased=False)
+        return hidden_states / torch.sqrt(var + self.eps)
 
 
 def fold_ln_weights(
     ln: nn.LayerNorm | nn.RMSNorm,
     linear: nn.Linear,
 ) -> tuple[nn.LayerNorm | nn.RMSNorm, nn.Linear]:
+    """
+    Fold linear computation inside layer norm into linear module.
+
+    Step1: let x, y be the input and output of the linear module.
+    Get W1.T and b1 such that y = x @ W1.T + b1.
+
+    Note:
+    Conv1D: y = x @ weight + bias
+    Linear: y = x @ weight.T + bias
+
+    Step2: let x,y be the input and output of the layer norm.
+    Let f(x) be denominator of layer norm.
+    Get W2 and b2 such that y = x / f(x) @ W2 + b2.
+
+    Note:
+    RMSNorm: f(x) = rms(x, eps) and W2 = diag(weight)
+    LayerNorm: f(x) = sqrt(var + eps) and W2 = centering @ diag(weight)
+    centering = I - 1/n
+
+    Step3: Merge W2 and b2 into W1 and b1.
+    ln(linear(x)) = (x/f(x) @ W2 + b2) @ W1.T + b1
+    = x/f(x) @ (W2 @ W1.T) + (b2 @ W1.T + b1)
+    """
+
     ln_has_bias = hasattr(ln, "bias") and ln.bias is not None
     linear_has_bias = hasattr(linear, "bias") and linear.bias is not None
 
-    print(f"ln: {ln_has_bias}, linear: {linear_has_bias}")
-
+    # get W1
     if isinstance(linear, Conv1D):
         linear_weight = linear.weight.T
     elif isinstance(linear, nn.Linear):
         linear_weight = linear.weight
 
     out_dim, in_dim = linear_weight.shape
+    linear_new = nn.Linear(in_dim, out_dim, bias=(linear_has_bias or ln_has_bias))
 
-    linear_new = nn.Linear(in_dim, out_dim, bias=linear_has_bias)
-    linear_new.weight = nn.Parameter(linear_weight @ torch.diag(ln.weight))
+    # merge W2 into W1
+    new_linear_weight = linear_weight @ torch.diag(ln.weight)
+    if isinstance(ln, nn.LayerNorm):
+        centering = torch.diag(torch.ones(in_dim)) - 1 / in_dim
+        new_linear_weight = new_linear_weight @ centering
+    linear_new.weight = nn.Parameter(new_linear_weight)
     assert linear_new.weight.shape == (out_dim, in_dim)
 
+    # merge b2 into b1
     if linear_has_bias or ln_has_bias:
         bias = torch.zeros(
             out_dim, dtype=linear_weight.dtype, device=linear.weight.device
@@ -39,10 +79,14 @@ def fold_ln_weights(
             bias += ln.bias @ linear_weight.T
         linear_new.bias = nn.Parameter(bias)
 
-    ln_new = copy.deepcopy(ln)
-    ln_new.weight = nn.Parameter(torch.ones_like(ln.weight))
-    if ln_has_bias:
-        ln_new.bias = nn.Parameter(torch.zeros_like(ln.bias))
+    # remove linear from ln
+    if isinstance(ln, nn.LayerNorm):
+        ln_new = LinearRemovedLayerNorm(ln.eps)
+    else:
+        ln_new = copy.deepcopy(ln)
+        ln_new.weight = nn.Parameter(torch.ones_like(ln.weight))
+        if ln_has_bias:
+            ln_new.bias = nn.Parameter(torch.zeros_like(ln.bias))
 
     return (
         ln_new,
@@ -79,7 +123,7 @@ def test_folded_ln_linear(
 
     ln_new, linear_new = fold_ln_weights(ln, linear)
 
-    x = torch.randn(3, indim)
+    x = torch.randn(3, indim) + 1
     assert torch.allclose(
         linear_new(ln_new(x)),
         linear(ln(x)),
