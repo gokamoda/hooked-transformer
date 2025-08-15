@@ -23,7 +23,7 @@ class LinearRemovedLayerNorm(nn.Module):
 def fold_ln_weights(
     ln: nn.LayerNorm | nn.RMSNorm,
     linear: nn.Linear,
-) -> tuple[nn.LayerNorm | nn.RMSNorm, nn.Linear]:
+) -> tuple[LinearRemovedLayerNorm | nn.RMSNorm, nn.Linear]:
     """
     Fold linear computation inside layer norm into linear module.
 
@@ -111,12 +111,12 @@ def test_folded_ln_linear(
         ln = ln_class(indim, bias=ln_bias)
     elif ln_class == nn.RMSNorm:
         if not ln_bias:
-            pass
+            return
         ln = ln_class(indim)
 
     if linear_class == Conv1D:
         if not linear_bias:
-            pass
+            return
         linear = linear_class(outdim, indim)
     elif linear_class == nn.Linear:
         linear = linear_class(indim, outdim, bias=linear_bias)
